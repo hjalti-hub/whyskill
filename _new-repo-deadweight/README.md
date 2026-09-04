@@ -31,8 +31,11 @@ HOOKS wall-clock you pay on every run
 
 Then you delete what you never use, and get that context back.
 
+There is nothing to install to find out:
+
 ```bash
-pip install deadweight && deadweight
+git clone https://github.com/hjalti-hub/deadweight && cd deadweight
+python3 -m deadweight
 ```
 
 Zero dependencies. Nothing leaves your machine.
@@ -71,7 +74,27 @@ secrets, then assert none of them survive anywhere in the result.
 **Nothing leaves your machine.** No network calls, no telemetry, no API key. It's
 a local file reader.
 
+## Install
+
+A clone is enough — run it as a module from inside the checkout:
+
+```bash
+git clone https://github.com/hjalti-hub/deadweight && cd deadweight
+python3 -m deadweight
+```
+
+To run it from any directory, install it from that clone:
+
+```bash
+pip install .        # or: pipx install .
+```
+
+Requires Python 3.9+. Not on PyPI yet, so `pip install deadweight` by name does
+not work — install from the clone as above.
+
 ## Use
+
+Once installed you can drop the `python3 -m` prefix; from a clone, keep it.
 
 ```bash
 deadweight                     # weigh every session on this machine
