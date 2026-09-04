@@ -32,8 +32,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/hjalti-hub/claude-skill"
-Issues = "https://github.com/hjalti-hub/claude-skill/issues"
+Homepage = "https://github.com/hjalti-hub/whyskill"
+Issues = "https://github.com/hjalti-hub/whyskill/issues"
 
 [project.scripts]
 whyskill = "whyskill.cli:main"

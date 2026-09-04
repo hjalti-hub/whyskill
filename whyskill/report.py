@@ -224,7 +224,7 @@ def render_sarif(
                     "driver": {
                         "name": "whyskill",
                         "version": VERSION,
-                        "informationUri": "https://github.com/hjalti-hub/claude-skill",
+                        "informationUri": "https://github.com/hjalti-hub/whyskill",
                         "rules": rules,
                     }
                 },

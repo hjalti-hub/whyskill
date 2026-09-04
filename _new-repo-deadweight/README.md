@@ -130,7 +130,7 @@ for item in report.dead:
 
 ## Related
 
-[whyskill](https://github.com/hjalti-hub/claude-skill) answers the other half of
+[whyskill](https://github.com/hjalti-hub/whyskill) answers the other half of
 the same question. It reads your configuration and proves a skill *can't* fire —
 truncated descriptions, name collisions, shadowing. This one reads your history
 and shows what *doesn't* fire, and what that costs you.

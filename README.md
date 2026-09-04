@@ -160,7 +160,7 @@ pip install whyskill
 Or run it straight from a clone — there is nothing to install:
 
 ```bash
-git clone https://github.com/hjalti-hub/claude-skill
+git clone https://github.com/hjalti-hub/whyskill
 python3 -m whyskill /path/to/your/skills
 ```
 
