@@ -21,6 +21,7 @@ prevent.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -191,6 +192,25 @@ def _strip_comment(value: str) -> str:
                 prev_space = ch in " \t"
         i += 1
     return "".join(out).rstrip()
+
+
+#: A mapping entry starts with a bare key and a colon: ``team: platform``.
+#: Prose does not - "Use when the user asks" has no colon in that position, and
+#: "Use when: the user asks" has a space inside the would-be key.
+_MAPPING_LINE = re.compile(r"^[A-Za-z0-9_.\-]+:(\s|$)")
+
+
+def _looks_like_mapping(line: str) -> bool:
+    """Whether an indented line opens a nested mapping rather than prose."""
+    return bool(_MAPPING_LINE.match(line.strip()))
+
+
+def _fold_scalar(lines: list[str]) -> Any:
+    """Join a value written across several indented lines.
+
+    YAML folds each line break in a plain or quoted scalar into one space.
+    """
+    return _parse_flow(" ".join(line.strip() for line in lines))
 
 
 def _quote_closed(text: str) -> bool:
@@ -482,6 +502,18 @@ def _parse_block(
                 item = _strip_comment(c.strip()[1:].strip())
                 items.append(_parse_flow(item) if item else None)
             data[key] = items
+        elif not _looks_like_mapping(meaningful[0]):
+            # A value may begin on the line *after* its key, quoted or plain:
+            #
+            #     description:
+            #       "Solve competition problems, with
+            #       verification that catches errors."
+            #
+            # That is ordinary YAML. Assuming an indented block must be a list
+            # or a mapping turned every one of those lines into an unparseable
+            # pair, and left the key holding an empty dict - so the skill also
+            # looked like it had no description at all.
+            data[key] = _fold_scalar(meaningful)
         else:
             nested, nested_lines, nested_issues = _parse_block(
                 child, line_offset=lineno + 1, base_indent=_indent_of(meaningful[0])

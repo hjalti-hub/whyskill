@@ -119,6 +119,53 @@ class MultiLineQuotedScalars(unittest.TestCase):
     whose pitch is being right about mechanics.
     """
 
+    def test_quoted_value_beginning_on_the_next_line(self):
+        """Regression: `description:` with the value indented below it.
+
+        Ten LOAD004 findings came from one skill written this way. Worse, the
+        key ended up holding an empty dict, so the skill also looked as though
+        it had no description at all.
+        """
+        result = parse(
+            "---\n"
+            "name: demo\n"
+            "description:\n"
+            '  "Solve competition problems (IMO, Putnam) with\n'
+            '  verification that catches errors."\n'
+            "allowed-tools: Read\n"
+            "---\n"
+        )
+        self.assertEqual(result.issues, [])
+        self.assertEqual(
+            result.data["description"],
+            "Solve competition problems (IMO, Putnam) with verification that catches errors.",
+        )
+        self.assertEqual(result.data["allowed-tools"], "Read")
+
+    def test_plain_value_beginning_on_the_next_line(self):
+        result = parse(
+            "---\nname: x\ndescription:\n  Use when the user asks to deploy\n"
+            "  or to ship a release.\nmodel: opus\n---\n"
+        )
+        self.assertEqual(result.issues, [])
+        self.assertEqual(
+            result.data["description"], "Use when the user asks to deploy or to ship a release."
+        )
+        self.assertEqual(result.data["model"], "opus")
+
+    def test_prose_containing_a_colon_is_not_read_as_a_mapping(self):
+        result = parse("---\ndescription:\n  Use when: the user asks\n  and continues.\n---\n")
+        self.assertEqual(result.issues, [])
+        self.assertEqual(result.data["description"], "Use when: the user asks and continues.")
+
+    def test_a_nested_mapping_is_still_a_mapping(self):
+        result = parse("---\nmetadata:\n  team: platform\n  tier: gold\n---\n")
+        self.assertEqual(result.data["metadata"], {"team": "platform", "tier": "gold"})
+
+    def test_a_block_list_is_still_a_list(self):
+        result = parse("---\npaths:\n  - src/**/*.ts\n  - lib/**/*.ts\n---\n")
+        self.assertEqual(result.data["paths"], ["src/**/*.ts", "lib/**/*.ts"])
+
     def test_double_quoted_value_spanning_lines(self):
         result = parse(
             "---\n"
