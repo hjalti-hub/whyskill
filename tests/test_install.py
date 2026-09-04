@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from whyskill import install as install_module
 from whyskill.install import MARKER, install, settings_path, status, uninstall
 
 EXISTING = {
@@ -133,6 +136,59 @@ class RefusesToDamage(InstallCase):
         code, _ = install(self.path)
         self.assertEqual(code, 0)
         self.assertEqual(len(self.ours(self.read())), 2)
+
+
+class RefusesToInstallABrokenHook(InstallCase):
+    """A hook that cannot import whyskill would fail silently - the exact bug
+    this project reports on. Better to refuse than to write it."""
+
+    def test_no_working_command_means_no_install(self):
+        with mock.patch.object(install_module, "hook_command", return_value=None):
+            code, message = install(self.path)
+        self.assertEqual(code, 2)
+        self.assertIn("hooks not installed", message)
+        self.assertIn("pip install .", message)
+        self.assertFalse(self.path.exists())
+
+    def test_existing_settings_are_untouched_when_refusing(self):
+        self.seed(EXISTING)
+        with mock.patch.object(install_module, "hook_command", return_value=None):
+            code, _ = install(self.path)
+        self.assertEqual(code, 2)
+        self.assertEqual(self.read(), EXISTING)
+
+    def test_console_script_is_preferred_when_present(self):
+        with mock.patch.object(install_module.shutil, "which", return_value="/usr/bin/whyskill"):
+            self.assertEqual(install_module.hook_command(), "whyskill hook")
+
+    def test_module_form_used_when_importable_without_a_script(self):
+        with (
+            mock.patch.object(install_module.shutil, "which", return_value=None),
+            mock.patch.object(install_module, "_importable_from_anywhere", return_value=True),
+        ):
+            command = install_module.hook_command()
+        self.assertIsNotNone(command)
+        self.assertIn("-m whyskill hook", command)
+
+    def test_importability_is_probed_from_a_neutral_directory(self):
+        """Probing from the checkout would always say yes, which is the bug."""
+        recorded = {}
+
+        def fake_run(argv, **kwargs):
+            recorded["cwd"] = kwargs.get("cwd")
+            return subprocess.CompletedProcess(argv, 0)
+
+        with mock.patch.object(install_module.subprocess, "run", side_effect=fake_run):
+            install_module._importable_from_anywhere()
+
+        self.assertIsNotNone(recorded["cwd"])
+        self.assertNotEqual(Path(recorded["cwd"]).resolve(), Path.cwd().resolve())
+
+    def test_probe_failure_is_treated_as_not_importable(self):
+        with mock.patch.object(
+            install_module.subprocess, "run", side_effect=OSError("no interpreter")
+        ):
+            self.assertFalse(install_module._importable_from_anywhere())
 
 
 class Uninstall(InstallCase):

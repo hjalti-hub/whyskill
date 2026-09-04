@@ -12,17 +12,17 @@ Usually it's something you cannot see by looking at the file:
 - a skill in `~/.claude/skills` quietly overriding your project's one
 - two skills described so alike that Claude picks the wrong one
 
-`whyskill` finds all of it, then gets out of your way:
+`whyskill` finds all of it. There is nothing to install to try it:
 
 ```bash
-pip install whyskill && whyskill install
+git clone https://github.com/hjalti-hub/whyskill && cd whyskill
+python3 -m whyskill ~/.claude/skills
 ```
 
-The second command is the one that matters. It registers whyskill as a Claude
-Code hook — so **you never run it again**. Claude checks its own skills and
-reports what's broken, on its own. See [Running itself](#running-itself).
-
 No API key. No model calls. No dependencies. Just `python3`.
+
+Once you want it to run without being asked, install it properly and it
+[hooks itself in](#running-itself) — after that you never type it again.
 
 ```console
 $ whyskill
@@ -153,22 +153,35 @@ you need it?**
 
 ## Install
 
-```bash
-pip install whyskill
-```
-
-Or run it straight from a clone — there is nothing to install:
+**To try it**, a clone is enough — run it as a module from inside the checkout:
 
 ```bash
-git clone https://github.com/hjalti-hub/whyskill
-python3 -m whyskill /path/to/your/skills
+git clone https://github.com/hjalti-hub/whyskill && cd whyskill
+python3 -m whyskill ~/.claude/skills
 ```
+
+**To keep it**, install it so it works from any directory:
+
+```bash
+pip install .        # from the checkout
+pipx install .       # or, to keep it out of your environment
+```
+
+That step is required before `whyskill install` will register the hooks, and
+whyskill enforces it rather than trusting you: a hook runs from whatever project
+you have open, so a hook that could only import whyskill from the checkout would
+fail there, and Claude Code would swallow the error and carry on. Rather than
+write a hook that never runs and never says so, `whyskill install` refuses and
+tells you to install first.
 
 Requires Python 3.9+. No third-party packages, at runtime or otherwise.
 
+> Not on PyPI yet, so `pip install whyskill` by name does not work — install from
+> the clone as above.
+
 ## Use
 
-Most people install the hooks and stop here. To run it directly:
+Once installed, drop the `python3 -m` prefix:
 
 ```bash
 whyskill install              # let Claude check skills without being asked
@@ -178,6 +191,9 @@ whyskill why deploy           # explain one skill
 whyskill list                 # what was discovered, and from where
 whyskill rules                # every rule, grouped
 ```
+
+Every command also works as `python3 -m whyskill …` from inside the checkout,
+except `whyskill install`, for the reason above.
 
 Useful flags:
 
@@ -324,7 +340,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pipx install whyskill
+      - run: pipx install git+https://github.com/hjalti-hub/whyskill
       - run: whyskill .claude/skills --no-personal --fail-on warning
 ```
 

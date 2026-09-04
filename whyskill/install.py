@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 #: Substring identifying an entry as ours, for upgrade and uninstall.
@@ -22,15 +24,56 @@ MARKER = "whyskill hook"
 EVENT_TIMEOUTS = {"PostToolUse": 20, "SessionStart": 30}
 
 
-def hook_command() -> str:
-    """The command to invoke whyskill, preferring the installed entry point.
+def _importable_from_anywhere() -> bool:
+    """True when ``python -m whyskill`` works from any directory.
 
-    Falls back to the running interpreter so a clone works with no install at
-    all - the hook must not depend on PATH being set up a particular way.
+    Running out of a clone puts that directory on ``sys.path``, so
+    ``python -m whyskill`` succeeds there and nowhere else. A hook runs from the
+    user's project instead, where the import would fail, the hook would exit
+    non-zero, and Claude Code would swallow it as a non-blocking hook error -
+    silently doing nothing, which is precisely the failure this project exists
+    to catch. Asking a neutral directory is the only honest way to know.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as neutral:
+            result = subprocess.run(
+                [sys.executable, "-c", "import whyskill"],
+                cwd=neutral,
+                capture_output=True,
+                timeout=30,
+            )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def hook_command() -> str | None:
+    """The command a hook should run, or ``None`` if there is no working one.
+
+    Returning ``None`` is deliberate: refusing to install is better than writing
+    a hook that never runs and never says why.
     """
     if shutil.which("whyskill"):
         return "whyskill hook"
-    return f"{sys.executable} -m whyskill hook"
+    if _importable_from_anywhere():
+        return f"{sys.executable} -m whyskill hook"
+    return None
+
+
+#: Shown when whyskill is only reachable from its own checkout.
+NOT_INSTALLED = (
+    "whyskill: hooks not installed.\n"
+    "\n"
+    "whyskill runs fine from this directory, but a hook runs from whatever "
+    "project you have open, and it would not be able to import whyskill from "
+    "there. Claude Code treats that as a non-blocking hook error and carries "
+    "on, so the hook would never run and never tell you.\n"
+    "\n"
+    "Install it first, then run `whyskill install` again:\n"
+    "\n"
+    "    pip install .        # from this checkout\n"
+    "    pipx install .       # or, to keep it out of your environment\n"
+)
 
 
 def hook_config(command: str | None = None) -> dict:
@@ -147,6 +190,12 @@ def install(path: Path, *, command: str | None = None, dry_run: bool = False) ->
     settings, error = _load(path)
     if error:
         return 2, f"whyskill: {error}"
+
+    command = command or hook_command()
+    if command is None:
+        # Writing the hook anyway would produce exactly the kind of silent
+        # failure this tool reports on.
+        return 2, NOT_INSTALLED
 
     updated = plan(settings, command)
     if dry_run:
