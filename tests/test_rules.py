@@ -230,6 +230,65 @@ class CollisionRules(RuleCase):
         self.write("git-assistant", f"---\nname: git-assistant\n{shared}---\n\nBody.\n")
         self.assertIn("COLLIDE005", self.rules_fired())
 
+    def test_a_family_of_similar_skills_reports_once_per_skill_not_per_pair(self):
+        """Regression: every pair above the threshold was reported.
+
+        On a real 53-skill install this rule emitted 175 findings, 79% of the
+        total. Six near-identical skills are 15 pairs; only each skill's closest
+        competitor is worth reporting, and each pair only once.
+        """
+        shared = (
+            "description: Use when the user asks to stage files, commit changes, "
+            "write a commit message, or review the diff in the git repository.\n"
+        )
+        for index in range(6):
+            name = f"git-{index}"
+            self.write(name, f"---\nname: {name}\n{shared}---\n\nBody.\n")
+
+        overlaps = [f for f in self.run_rules()[1] if f.rule == "COLLIDE005"]
+        self.assertEqual(len(overlaps), 1, "one family is one finding")
+        self.assertIn("6 skills", overlaps[0].message)
+        # Every member is named, so nothing is hidden by the collapse.
+        for index in range(6):
+            self.assertIn(f"git-{index}", overlaps[0].message)
+
+    def test_the_pair_reported_is_the_closest_one(self):
+        self.write(
+            "twin-a",
+            "---\nname: twin-a\ndescription: Use when the user asks to rotate "
+            "encrypted backup archives onto cold storage tape.\n---\n\nBody.\n",
+        )
+        self.write(
+            "twin-b",
+            "---\nname: twin-b\ndescription: Use when the user asks to rotate "
+            "encrypted backup archives onto cold storage tape.\n---\n\nBody.\n",
+        )
+        self.write(
+            "distant",
+            "---\nname: distant\ndescription: Use when the user asks about "
+            "stylesheet layout tokens and typography scales.\n---\n\nBody.\n",
+        )
+        overlaps = [f for f in self.run_rules()[1] if f.rule == "COLLIDE005"]
+        self.assertEqual(len(overlaps), 1)
+        self.assertIn("twin", overlaps[0].message)
+        self.assertNotIn("distant", overlaps[0].message)
+
+    def test_two_separate_families_are_two_findings(self):
+        """Collapsing must not merge unrelated groups."""
+        git = (
+            "description: Use when the user asks to stage files, commit changes, "
+            "or review the diff in the git repository.\n"
+        )
+        css = (
+            "description: Use when the user asks about stylesheet layout tokens, "
+            "typography scales, or spacing rhythm in the design system.\n"
+        )
+        for index in range(3):
+            self.write(f"git-{index}", f"---\nname: git-{index}\n{git}---\n\nBody.\n")
+            self.write(f"css-{index}", f"---\nname: css-{index}\n{css}---\n\nBody.\n")
+        overlaps = [f for f in self.run_rules()[1] if f.rule == "COLLIDE005"]
+        self.assertEqual(len(overlaps), 2)
+
     def test_unrelated_descriptions_do_not_overlap(self):
         self.write(
             "sql",
@@ -256,6 +315,33 @@ class CollisionRules(RuleCase):
 
 
 class PortabilityRules(RuleCase):
+    def test_fields_in_files_the_user_cannot_edit_are_not_reported(self):
+        """Regression: PORT001 fired 34 times on plugin and synced skills.
+
+        Those files belong to whoever published them. The finding is correct but
+        unactionable, and it buries findings about the user's own skills.
+        """
+        from whyskill.discover import _load
+        from whyskill.rules.portability import is_editable
+
+        content = CLEAN.format(name="theirs").replace(
+            "---\n\nBody.", "version: 1.0.0\n---\n\nBody."
+        )
+        path = self.write("theirs", content)
+
+        plugin = _load(path, Source.PLUGIN, "theirs", plugin="somebody")
+        self.assertFalse(is_editable(plugin))
+
+        synced_dir = self.root / ".claude" / "skills" / "synced" / "theirs"
+        synced_dir.mkdir(parents=True, exist_ok=True)
+        synced_path = synced_dir / "SKILL.md"
+        synced_path.write_text(content, encoding="utf-8")
+        self.assertFalse(is_editable(_load(synced_path, Source.PERSONAL, "theirs")))
+
+        # The user's own skill is still reported.
+        self.assertTrue(is_editable(_load(path, Source.PROJECT, "theirs")))
+        self.assertIn("PORT001", self.rules_fired())
+
     def test_version_field_has_no_effect(self):
         content = CLEAN.format(name="versioned").replace(
             "---\n\nBody.", "version: 1.0.0\n---\n\nBody."

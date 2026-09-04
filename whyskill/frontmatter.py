@@ -21,6 +21,7 @@ prevent.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -191,6 +192,49 @@ def _strip_comment(value: str) -> str:
                 prev_space = ch in " \t"
         i += 1
     return "".join(out).rstrip()
+
+
+#: A mapping entry starts with a bare key and a colon: ``team: platform``.
+#: Prose does not - "Use when the user asks" has no colon in that position, and
+#: "Use when: the user asks" has a space inside the would-be key.
+_MAPPING_LINE = re.compile(r"^[A-Za-z0-9_.\-]+:(\s|$)")
+
+
+def _looks_like_mapping(line: str) -> bool:
+    """Whether an indented line opens a nested mapping rather than prose."""
+    return bool(_MAPPING_LINE.match(line.strip()))
+
+
+def _fold_scalar(lines: list[str]) -> Any:
+    """Join a value written across several indented lines.
+
+    YAML folds each line break in a plain or quoted scalar into one space.
+    """
+    return _parse_flow(" ".join(line.strip() for line in lines))
+
+
+def _quote_closed(text: str) -> bool:
+    """Whether the quote opening ``text`` is closed within it.
+
+    Handles both escape conventions: ``\\"`` inside a double-quoted scalar, and
+    a doubled ``''`` inside a single-quoted one.
+    """
+    if not text or text[0] not in "\"'":
+        return True
+    quote = text[0]
+    i = 1
+    while i < len(text):
+        char = text[i]
+        if quote == '"' and char == "\\":
+            i += 2
+            continue
+        if char == quote:
+            if quote == "'" and text[i + 1 : i + 2] == "'":
+                i += 2
+                continue
+            return True
+        i += 1
+    return False
 
 
 def _unquote(value: str) -> tuple[str, bool]:
@@ -391,6 +435,44 @@ def _parse_block(
             i = j
             continue
 
+        # A quoted scalar may span several lines. YAML folds each line break
+        # into a single space, so `description: "one\n  two"` is one value.
+        # Reading only the first line made every continuation look like a
+        # malformed `key: value` pair, which reported a working skill as broken.
+        if value_part and value_part[0] in "\"'" and not _quote_closed(value_part):
+            quote = value_part[0]
+            parts = [value_part]
+            j = i + 1
+            closed = False
+            while j < len(lines):
+                # Inside a string: no comment stripping, no key detection.
+                nxt = lines[j].strip()
+                parts.append(nxt)
+                if _quote_closed(quote + " ".join(parts)[1:]):
+                    closed = True
+                    j += 1
+                    break
+                j += 1
+
+            if closed:
+                data[key] = _parse_flow(" ".join(parts))
+                key_lines[key] = lineno
+                i = j
+                continue
+
+            issues.append(
+                ParseIssue(
+                    code="LOAD004",
+                    message=f"Quoted value for {key!r} is never closed",
+                    line=lineno,
+                    fix="Add the missing closing quote.",
+                )
+            )
+            data[key] = _parse_flow(" ".join(parts))
+            key_lines[key] = lineno
+            i = j
+            continue
+
         if value_part:
             data[key] = _parse_flow(value_part)
             key_lines[key] = lineno
@@ -420,6 +502,18 @@ def _parse_block(
                 item = _strip_comment(c.strip()[1:].strip())
                 items.append(_parse_flow(item) if item else None)
             data[key] = items
+        elif not _looks_like_mapping(meaningful[0]):
+            # A value may begin on the line *after* its key, quoted or plain:
+            #
+            #     description:
+            #       "Solve competition problems, with
+            #       verification that catches errors."
+            #
+            # That is ordinary YAML. Assuming an indented block must be a list
+            # or a mapping turned every one of those lines into an unparseable
+            # pair, and left the key holding an empty dict - so the skill also
+            # looked like it had no description at all.
+            data[key] = _fold_scalar(meaningful)
         else:
             nested, nested_lines, nested_issues = _parse_block(
                 child, line_offset=lineno + 1, base_indent=_indent_of(meaningful[0])

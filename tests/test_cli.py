@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from whyskill.cli import _with_default_command, main
 
@@ -46,6 +49,76 @@ class ArgumentDefaulting(unittest.TestCase):
 
     def test_help_is_not_rewritten(self):
         self.assertEqual(_with_default_command(["--help"]), ["--help"])
+
+    def test_new_subcommands_are_recognised(self):
+        for command in ("install", "hook"):
+            with self.subTest(command=command):
+                self.assertEqual(_with_default_command([command]), [command])
+
+    def test_no_arguments_still_gets_the_default_command(self):
+        """Regression: `whyskill` with no arguments crashed.
+
+        An empty argv was returned unchanged, so argparse parsed no subcommand
+        and produced a Namespace without any of the check options. The first
+        attribute access then raised AttributeError. Bare `whyskill` is the
+        most common invocation there is.
+        """
+        self.assertEqual(_with_default_command([]), ["check"])
+
+
+class RunsWithNoArguments(unittest.TestCase):
+    """Every entry point must survive being invoked with nothing at all."""
+
+    def test_bare_invocation_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as empty:
+            # An empty config dir keeps the result independent of this machine.
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": empty}):
+                code, out = run([])
+        self.assertIn(code, (0, 1))
+        self.assertTrue(out.strip())
+
+    def test_every_subcommand_survives_bare_invocation(self):
+        with tempfile.TemporaryDirectory() as empty:
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": empty}):
+                for command in ("check", "list", "rules"):
+                    with self.subTest(command=command):
+                        code, out = run([command])
+                        self.assertIn(code, (0, 1))
+                        self.assertTrue(out.strip())
+
+
+class BadInvocation(unittest.TestCase):
+    """A mistyped subcommand must not be silently scanned as a directory."""
+
+    def test_missing_path_is_an_error(self):
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            code = main(["check", "/nonexistent/path/xyz", *BASE])
+        self.assertEqual(code, 2)
+        self.assertIn("no such file or directory", buffer.getvalue())
+
+    def test_mistyped_subcommand_does_not_report_success(self):
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            code = main(["uninstall"])
+        self.assertEqual(code, 2)
+
+
+class InstallCommand(unittest.TestCase):
+    def test_print_only_emits_settings_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run(["install", "--project", tmp, "--print"])
+            self.assertEqual(code, 0)
+            payload = json.loads(out)
+            self.assertIn("SessionStart", payload["hooks"])
+            self.assertFalse((Path(tmp) / ".claude" / "settings.json").exists())
+
+    def test_install_then_status_then_uninstall(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(run(["install", "--project", tmp])[0], 0)
+            self.assertEqual(run(["install", "--project", tmp, "--status"])[0], 0)
+            self.assertEqual(run(["install", "--project", tmp, "--uninstall"])[0], 0)
+            self.assertEqual(run(["install", "--project", tmp, "--status"])[0], 1)
 
 
 class ExitCodes(unittest.TestCase):

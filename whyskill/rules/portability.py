@@ -7,7 +7,7 @@ and the Skills API are stricter and reject the file outright.
 
 from __future__ import annotations
 
-from ..model import Finding, Severity, Skill
+from ..model import Finding, Severity, Skill, Source
 from ..spec import CLAUDE_CODE_FIELDS, COMPATIBILITY_MAX, SPEC_FIELDS
 from . import Context, per_skill
 
@@ -30,10 +30,24 @@ KNOWN_NON_FIELDS = {
 }
 
 
+def is_editable(skill: Skill) -> bool:
+    """True when the reader is the person who could fix this file.
+
+    A skill installed from a plugin, or synced down from claude.ai, belongs to
+    whoever published it. Telling someone that a field in a file they do not
+    control has no effect is noise: it is not wrong, but there is nothing they
+    can do with it, and it drowns the findings about their own skills.
+    """
+    if skill.source is Source.PLUGIN:
+        return False
+    # Synced skills land in ~/.claude/skills/synced/ and read as personal.
+    return "synced" not in skill.path.parts
+
+
 @per_skill
 def unknown_fields(skill: Skill, ctx: Context) -> list[Finding]:
     """PORT001 - a frontmatter field Claude Code does not read."""
-    if not skill.has_frontmatter:
+    if not skill.has_frontmatter or not is_editable(skill):
         return []
 
     findings: list[Finding] = []

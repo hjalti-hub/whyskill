@@ -53,6 +53,32 @@ jobs:
           whyskill --version
           whyskill examples/good --no-personal --no-plugins
 
+      - name: The shipped skill must pass its own checks
+        run: whyskill .claude/skills --no-personal --no-plugins --target spec --fail-on warning
+
+      - name: The hook must report a broken skill to Claude (exit 2)
+        run: |
+          payload='{"hook_event_name":"PostToolUse","tool_name":"Write","cwd":"'$PWD'","tool_input":{"file_path":"'$PWD'/examples/broken/dead-skill/SKILL.md"}}'
+          set +e
+          echo "$payload" | whyskill hook 2>hook.err
+          code=$?
+          set -e
+          test "$code" -eq 2 || { echo "::error::expected exit 2, got $code"; exit 1; }
+          grep -q INVOKE001 hook.err || { echo "::error::finding missing from stderr"; exit 1; }
+
+      - name: The hook must stay silent on a healthy skill
+        run: |
+          payload='{"hook_event_name":"PostToolUse","tool_name":"Write","cwd":"'$PWD'","tool_input":{"file_path":"'$PWD'/examples/good/summarize-diff/SKILL.md"}}'
+          out=$(echo "$payload" | whyskill hook)
+          test -z "$out" || { echo "::error::hook spoke when nothing was wrong: $out"; exit 1; }
+
+      - name: The hook must survive garbage without breaking a session
+        run: |
+          for junk in '' 'not json' '[]' '{"broken":'; do
+            printf '%s' "$junk" | whyskill hook || {
+              echo "::error::hook exited non-zero on input: $junk"; exit 1; }
+          done
+
   lint:
     runs-on: ubuntu-latest
     steps:

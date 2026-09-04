@@ -1,13 +1,28 @@
 # whyskill
 
-**Find the Claude Code skills that will never fire — before you spend an hour wondering why.**
+### Your skill isn't broken. It's invisible.
 
-A broken skill does not print an error. It does not warn you. It just sits there
-while Claude behaves as though it does not exist. That silence is the entire
-problem: you cannot debug something that never says anything.
+You wrote a skill. Claude ignores it. There's no error, no warning, nothing in
+the logs — it just never fires, and you have no idea why.
 
-`whyskill` finds those skills. Zero dependencies, no API key, no model calls —
-just `python3`.
+Usually it's something you cannot see by looking at the file:
+
+- a blank line above `---`, so the frontmatter was never read
+- your trigger phrases sitting past a **1,536-character cap** that cuts them off
+- a skill in `~/.claude/skills` quietly overriding your project's one
+- two skills described so alike that Claude picks the wrong one
+
+`whyskill` finds all of it. There is nothing to install to try it:
+
+```bash
+git clone https://github.com/hjalti-hub/whyskill && cd whyskill
+python3 -m whyskill ~/.claude/skills
+```
+
+No API key. No model calls. No dependencies. Just `python3`.
+
+Once you want it to run without being asked, install it properly and it
+[hooks itself in](#running-itself) — after that you never type it again.
 
 ```console
 $ whyskill
@@ -49,6 +64,65 @@ deploy-staging  .claude/skills/deploy-staging/SKILL.md
 
 ---
 
+## Running itself
+
+Nobody remembers to run a linter for a bug they don't know they have. So the
+normal way to use whyskill is to never type it:
+
+```bash
+whyskill install
+```
+
+This adds two hooks to `.claude/settings.json` (use `--user` for every project,
+`--local` to keep it out of the repository). **The harness runs hooks — Claude
+does not choose to.** That distinction matters here more than usual: a *skill*
+has to be selected to run, and being selected is precisely the thing that fails
+silently. A hook fires whether or not anyone thought about it.
+
+**`PostToolUse`** fires the instant a `SKILL.md` is written, by you or by Claude.
+If the skill has errors, the hook exits 2, which puts its output in front of
+Claude — so a skill written broken gets reported and fixed inside the same turn:
+
+> whyskill: SKILL.md was written with 1 error(s) that will make it fail silently.
+> &nbsp;&nbsp;`.claude/skills/deploy/SKILL.md:1`
+> &nbsp;&nbsp;&nbsp;&nbsp;LOAD001 (error): Blank line(s) before the `---` on line 2
+> &nbsp;&nbsp;&nbsp;&nbsp;fix: Delete the blank line(s) so `---` is the first line.
+
+**`SessionStart`** fires when a session opens and reports skills that were
+already broken before today, as context Claude can act on.
+
+Three properties keep it from becoming a nuisance:
+
+- **It is silent when nothing is wrong.** A clean run prints nothing at all, so
+  it costs no context and never trains you to ignore it.
+- **It never breaks your session.** Any internal failure — a malformed payload, a
+  bug in whyskill itself — exits 0 quietly. A linter that breaks the tool it
+  protects has negative value.
+- **It is cheap on the common path.** Most edits aren't skill files; that case
+  returns before whyskill imports anything.
+
+`SessionStart` reports only errors by default, since warnings on every session
+open would be noise. `PostToolUse` includes warnings, because you're already
+looking at that file. Both are adjustable in the settings it writes.
+
+```bash
+whyskill install --status      # is it installed?
+whyskill install --print       # show the settings.json without writing it
+whyskill install --uninstall   # remove it; other hooks are left untouched
+```
+
+The installer merges rather than overwrites, keeps a `.whyskill-backup`, is
+idempotent, and refuses to touch a `settings.json` it cannot parse.
+
+### Or as a skill
+
+`.claude/skills/whyskill/SKILL.md` ships in this repo, so `/whyskill` works and
+Claude can reach for it when you ask why something isn't firing. It's a
+convenience, not the mechanism — the hooks are what make it autonomous, and the
+skill is subject to every failure mode it detects.
+
+---
+
 ## Why another skill linter?
 
 There are already several good SKILL.md linters. Before writing this one I
@@ -79,28 +153,47 @@ you need it?**
 
 ## Install
 
-```bash
-pip install whyskill
-```
-
-Or run it straight from a clone — there is nothing to install:
+**To try it**, a clone is enough — run it as a module from inside the checkout:
 
 ```bash
-git clone https://github.com/hjalti-hub/claude-skill
-python3 -m whyskill /path/to/your/skills
+git clone https://github.com/hjalti-hub/whyskill && cd whyskill
+python3 -m whyskill ~/.claude/skills
 ```
+
+**To keep it**, install it so it works from any directory:
+
+```bash
+pip install .        # from the checkout
+pipx install .       # or, to keep it out of your environment
+```
+
+That step is required before `whyskill install` will register the hooks, and
+whyskill enforces it rather than trusting you: a hook runs from whatever project
+you have open, so a hook that could only import whyskill from the checkout would
+fail there, and Claude Code would swallow the error and carry on. Rather than
+write a hook that never runs and never says so, `whyskill install` refuses and
+tells you to install first.
 
 Requires Python 3.9+. No third-party packages, at runtime or otherwise.
 
+> Not on PyPI yet, so `pip install whyskill` by name does not work — install from
+> the clone as above.
+
 ## Use
 
+Once installed, drop the `python3 -m` prefix:
+
 ```bash
+whyskill install              # let Claude check skills without being asked
 whyskill                      # this project's skills, plus your personal ones
 whyskill ./skills             # a directory of skills you are publishing
 whyskill why deploy           # explain one skill
 whyskill list                 # what was discovered, and from where
 whyskill rules                # every rule, grouped
 ```
+
+Every command also works as `python3 -m whyskill …` from inside the checkout,
+except `whyskill install`, for the reason above.
 
 Useful flags:
 
@@ -247,7 +340,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pipx install whyskill
+      - run: pipx install git+https://github.com/hjalti-hub/whyskill
       - run: whyskill .claude/skills --no-personal --fail-on warning
 ```
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from ..model import Finding, Severity, Skill, Source
 from ..normalize import fold, skeleton, suspicious_characters
@@ -277,7 +278,23 @@ def description_overlap(skills: list[Skill], ctx: Context) -> list[Finding]:
     # still scores low rather than dividing by zero.
     idf = {t: math.log((total + 1) / (n + 1)) + 1.0 for t, n in df.items()}
 
-    findings: list[Finding] = []
+    # Every pair above a threshold is the wrong thing to report. The count grows
+    # quadratically - 53 skills is 1,378 pairs - and a family of related skills
+    # produces a finding for every combination of its members, burying everything
+    # else. On a real 53-skill install this rule alone emitted 175 findings, 79%
+    # of the total, which is indistinguishable from saying nothing.
+    #
+    # What actually matters is narrower: a skill loses to whichever *one* other
+    # skill it resembles most. So keep each skill's closest competitor, then
+    # report each pair once. That is at most one finding per skill instead of one
+    # per pair, and fixing the worst overlap in a family is what breaks the tie
+    # for the whole family anyway.
+    by_path = {s.path: s for s in candidates}
+    neighbours: dict[Path, set[Path]] = defaultdict(set)
+    #: The single strongest pair inside each group, for the headline.
+    best_pair: tuple[float, Path, Path, list[str]] | None = None
+    pair_detail: dict[tuple[Path, Path], tuple[float, list[str]]] = {}
+
     for i in range(len(candidates)):
         for j in range(i + 1, len(candidates)):
             a, b = candidates[i], candidates[j]
@@ -292,32 +309,80 @@ def description_overlap(skills: list[Skill], ctx: Context) -> list[Finding]:
             if score < ctx.overlap_threshold:
                 continue
 
-            top = sorted(shared, key=lambda t: -idf[t])[:6]
-            findings.append(
-                Finding(
-                    rule="COLLIDE005",
-                    severity=Severity.WARNING,
-                    message=(
-                        f"{a.invocation_name!r} and {b.invocation_name!r} describe "
-                        f"themselves {score:.0%} alike; routing between them is "
-                        "unreliable"
-                    ),
-                    path=a.path,
-                    line=a.line_of("description", 2),
-                    skill=a.invocation_name,
-                    mechanic=(
-                        "Claude chooses between skills by comparing the request "
-                        "against each description. When two descriptions claim the "
-                        "same vocabulary it picks whichever seems closest, which "
-                        "may be the wrong one, and nothing reports the near-miss."
-                    ),
-                    fix=(
-                        "Make the descriptions disjoint. Both currently claim: "
-                        + ", ".join(top)
-                        + ". State what each one is *not* for, or name the other "
-                        "skill explicitly to turn the ambiguity into a routing rule."
-                    ),
-                    related=[str(b.path)],
-                )
+            top = sorted(shared, key=lambda t: (-idf[t], t))[:6]
+            neighbours[a.path].add(b.path)
+            neighbours[b.path].add(a.path)
+            pair_detail[(a.path, b.path)] = (score, top)
+
+    findings: list[Finding] = []
+    seen: set[Path] = set()
+
+    # A family of related skills - six firecrawl helpers, say - is one problem,
+    # not fifteen. Grouping the overlap graph into connected components reports
+    # it once, names every member, and keeps the output proportional to the
+    # number of *confusions* rather than the number of pairs.
+    for start in sorted(neighbours, key=str):
+        if start in seen:
+            continue
+        group: set[Path] = set()
+        queue = [start]
+        while queue:
+            current = queue.pop()
+            if current in group:
+                continue
+            group.add(current)
+            queue.extend(neighbours[current] - group)
+        seen |= group
+        if len(group) < 2:
+            continue
+
+        best_pair = None
+        for (left, right), (score, top) in pair_detail.items():
+            if left in group and right in group:
+                if best_pair is None or score > best_pair[0]:
+                    best_pair = (score, left, right, top)
+        if best_pair is None:  # pragma: no cover - a group implies a pair
+            continue
+
+        score, left, right, top = best_pair
+        anchor = by_path[left]
+        partner = by_path[right]
+        members = sorted(by_path[p].invocation_name for p in group)
+
+        if len(group) == 2:
+            message = (
+                f"{anchor.invocation_name!r} and {partner.invocation_name!r} describe "
+                f"themselves {score:.0%} alike; routing between them is unreliable"
             )
+        else:
+            message = (
+                f"{len(group)} skills describe themselves alike (up to {score:.0%}), so "
+                f"routing among them is unreliable: {', '.join(members)}"
+            )
+
+        findings.append(
+            Finding(
+                rule="COLLIDE005",
+                severity=Severity.WARNING,
+                message=message,
+                path=anchor.path,
+                line=anchor.line_of("description", 2),
+                skill=anchor.invocation_name,
+                mechanic=(
+                    "Claude chooses between skills by comparing the request "
+                    "against each description. When several descriptions claim "
+                    "the same vocabulary it picks whichever seems closest, which "
+                    "may be the wrong one, and nothing reports the near-miss. "
+                    "A group of look-alike skills is reported once, because "
+                    "separating them is a single piece of work."
+                ),
+                fix=(
+                    "Make the descriptions disjoint. They all claim: "
+                    + ", ".join(top)
+                    + ". State what each one is *not* for, or name the neighbouring "
+                    "skill explicitly to turn the ambiguity into a routing rule."
+                ),
+                related=[str(p) for p in sorted(group, key=str) if p != anchor.path],
+            )
+        )
     return findings
