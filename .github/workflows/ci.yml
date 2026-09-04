@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+
+  dogfood:
+    # whyskill has to survive its own examples, or the examples are lying.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: The good example must be clean
+        run: python -m whyskill examples/good --no-personal --no-plugins --fail-on note
+
+      - name: The broken examples must still be broken
+        run: |
+          if python -m whyskill examples/broken --no-personal --no-plugins; then
+            echo "::error::examples/broken produced no findings; the examples have rotted"
+            exit 1
+          fi
+
+      - name: SARIF output must be well-formed
+        run: |
+          python -m whyskill examples/broken --no-personal --no-plugins \
+            --sarif --fail-on never > whyskill.sarif
+          python -c "import json,sys; d=json.load(open('whyskill.sarif')); \
+            assert d['version']=='2.1.0'; assert d['runs'][0]['results']; \
+            print(len(d['runs'][0]['results']), 'results')"
+
+      - name: Install as a package and run the entry point
+        run: |
+          pip install .
+          whyskill --version
+          whyskill examples/good --no-personal --no-plugins
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pipx install ruff
+      - run: ruff check whyskill tests
+      - run: ruff format --check whyskill tests
