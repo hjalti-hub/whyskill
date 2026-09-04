@@ -110,6 +110,62 @@ class CollectionParsing(unittest.TestCase):
         self.assertEqual(result.data["allowed-tools"], ["Bash(git diff:*, x)", "Read"])
 
 
+class MultiLineQuotedScalars(unittest.TestCase):
+    """Regression: a quoted value spanning lines was read as broken frontmatter.
+
+    Found on a real install - one skill produced ten LOAD004 findings because
+    the parser only ever read `key: value` from a single line. The file was
+    valid YAML the whole time. False alarms are worse than silence for a tool
+    whose pitch is being right about mechanics.
+    """
+
+    def test_double_quoted_value_spanning_lines(self):
+        result = parse(
+            "---\n"
+            "name: demo\n"
+            'description: "Solve competition problems (IMO, Putnam) with\n'
+            "  verification. Use when asked to 'prove this' or 'check that'.\"\n"
+            "allowed-tools: Read\n"
+            "---\n"
+        )
+        self.assertEqual(result.issues, [])
+        self.assertIn("Solve competition problems", result.data["description"])
+        self.assertIn("check that", result.data["description"])
+        # A key after the multi-line value must still be found.
+        self.assertEqual(result.data["allowed-tools"], "Read")
+
+    def test_line_breaks_fold_to_single_spaces(self):
+        result = parse('---\ndescription: "one\n  two\n  three"\n---\n')
+        self.assertEqual(result.data["description"], "one two three")
+
+    def test_single_quoted_value_spanning_lines(self):
+        result = parse("---\ndescription: 'alpha\n  beta'\nname: x\n---\n")
+        self.assertEqual(result.issues, [])
+        self.assertEqual(result.data["description"], "alpha beta")
+        self.assertEqual(result.data["name"], "x")
+
+    def test_embedded_quotes_do_not_end_the_value_early(self):
+        result = parse('---\ndescription: "he said \\"maybe\\" and\n  then left"\nname: x\n---\n')
+        self.assertEqual(result.issues, [])
+        self.assertEqual(result.data["name"], "x")
+        self.assertIn("maybe", result.data["description"])
+
+    def test_doubled_single_quote_is_an_escape(self):
+        result = parse("---\ndescription: 'it''s fine\n  really'\nname: x\n---\n")
+        self.assertEqual(result.issues, [])
+        self.assertEqual(result.data["description"], "it's fine really")
+
+    def test_single_line_quoted_value_is_unaffected(self):
+        result = parse('---\ndescription: "all on one line"\nname: x\n---\n')
+        self.assertEqual(result.issues, [])
+        self.assertEqual(result.data["description"], "all on one line")
+        self.assertEqual(result.data["name"], "x")
+
+    def test_a_genuinely_unterminated_quote_is_still_reported(self):
+        result = parse('---\nname: demo\ndescription: "never closed\n---\n')
+        self.assertIn("LOAD004", [i.code for i in result.issues])
+
+
 class Diagnostics(unittest.TestCase):
     def test_duplicate_key_reported(self):
         result = parse("---\ndescription: First.\ndescription: Second.\n---\n")

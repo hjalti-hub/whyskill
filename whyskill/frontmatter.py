@@ -193,6 +193,30 @@ def _strip_comment(value: str) -> str:
     return "".join(out).rstrip()
 
 
+def _quote_closed(text: str) -> bool:
+    """Whether the quote opening ``text`` is closed within it.
+
+    Handles both escape conventions: ``\\"`` inside a double-quoted scalar, and
+    a doubled ``''`` inside a single-quoted one.
+    """
+    if not text or text[0] not in "\"'":
+        return True
+    quote = text[0]
+    i = 1
+    while i < len(text):
+        char = text[i]
+        if quote == '"' and char == "\\":
+            i += 2
+            continue
+        if char == quote:
+            if quote == "'" and text[i + 1 : i + 2] == "'":
+                i += 2
+                continue
+            return True
+        i += 1
+    return False
+
+
 def _unquote(value: str) -> tuple[str, bool]:
     """Return (value, was_quoted)."""
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
@@ -387,6 +411,44 @@ def _parse_block(
                 else "\n".join(collected)
             )
             data[key] = joined.strip("\n")
+            key_lines[key] = lineno
+            i = j
+            continue
+
+        # A quoted scalar may span several lines. YAML folds each line break
+        # into a single space, so `description: "one\n  two"` is one value.
+        # Reading only the first line made every continuation look like a
+        # malformed `key: value` pair, which reported a working skill as broken.
+        if value_part and value_part[0] in "\"'" and not _quote_closed(value_part):
+            quote = value_part[0]
+            parts = [value_part]
+            j = i + 1
+            closed = False
+            while j < len(lines):
+                # Inside a string: no comment stripping, no key detection.
+                nxt = lines[j].strip()
+                parts.append(nxt)
+                if _quote_closed(quote + " ".join(parts)[1:]):
+                    closed = True
+                    j += 1
+                    break
+                j += 1
+
+            if closed:
+                data[key] = _parse_flow(" ".join(parts))
+                key_lines[key] = lineno
+                i = j
+                continue
+
+            issues.append(
+                ParseIssue(
+                    code="LOAD004",
+                    message=f"Quoted value for {key!r} is never closed",
+                    line=lineno,
+                    fix="Add the missing closing quote.",
+                )
+            )
+            data[key] = _parse_flow(" ".join(parts))
             key_lines[key] = lineno
             i = j
             continue
