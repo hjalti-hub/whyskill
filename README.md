@@ -1,21 +1,28 @@
 # whyskill
 
-**Find the Claude Code skills that will never fire — before you spend an hour wondering why.**
+### Your skill isn't broken. It's invisible.
 
-A broken skill does not print an error. It does not warn you. It just sits there
-while Claude behaves as though it does not exist. That silence is the entire
-problem: you cannot debug something that never says anything.
+You wrote a skill. Claude ignores it. There's no error, no warning, nothing in
+the logs — it just never fires, and you have no idea why.
 
-`whyskill` finds those skills. Zero dependencies, no API key, no model calls —
-just `python3`.
+Usually it's something you cannot see by looking at the file:
+
+- a blank line above `---`, so the frontmatter was never read
+- your trigger phrases sitting past a **1,536-character cap** that cuts them off
+- a skill in `~/.claude/skills` quietly overriding your project's one
+- two skills described so alike that Claude picks the wrong one
+
+`whyskill` finds all of it, then gets out of your way:
 
 ```bash
 pip install whyskill && whyskill install
 ```
 
-That second command is the important one. It registers whyskill as a Claude Code
-hook, so **you never run it again** — Claude checks skills on its own, and tells
-you when one is broken. Details in [Running itself](#running-itself).
+The second command is the one that matters. It registers whyskill as a Claude
+Code hook — so **you never run it again**. Claude checks its own skills and
+reports what's broken, on its own. See [Running itself](#running-itself).
+
+No API key. No model calls. No dependencies. Just `python3`.
 
 ```console
 $ whyskill
