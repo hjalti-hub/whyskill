@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from whyskill.cli import _with_default_command, main
@@ -46,6 +47,45 @@ class ArgumentDefaulting(unittest.TestCase):
 
     def test_help_is_not_rewritten(self):
         self.assertEqual(_with_default_command(["--help"]), ["--help"])
+
+    def test_new_subcommands_are_recognised(self):
+        for command in ("install", "hook"):
+            with self.subTest(command=command):
+                self.assertEqual(_with_default_command([command]), [command])
+
+
+class BadInvocation(unittest.TestCase):
+    """A mistyped subcommand must not be silently scanned as a directory."""
+
+    def test_missing_path_is_an_error(self):
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            code = main(["check", "/nonexistent/path/xyz", *BASE])
+        self.assertEqual(code, 2)
+        self.assertIn("no such file or directory", buffer.getvalue())
+
+    def test_mistyped_subcommand_does_not_report_success(self):
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            code = main(["uninstall"])
+        self.assertEqual(code, 2)
+
+
+class InstallCommand(unittest.TestCase):
+    def test_print_only_emits_settings_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run(["install", "--project", tmp, "--print"])
+            self.assertEqual(code, 0)
+            payload = json.loads(out)
+            self.assertIn("SessionStart", payload["hooks"])
+            self.assertFalse((Path(tmp) / ".claude" / "settings.json").exists())
+
+    def test_install_then_status_then_uninstall(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(run(["install", "--project", tmp])[0], 0)
+            self.assertEqual(run(["install", "--project", tmp, "--status"])[0], 0)
+            self.assertEqual(run(["install", "--project", tmp, "--uninstall"])[0], 0)
+            self.assertEqual(run(["install", "--project", tmp, "--status"])[0], 1)
 
 
 class ExitCodes(unittest.TestCase):

@@ -9,6 +9,14 @@ problem: you cannot debug something that never says anything.
 `whyskill` finds those skills. Zero dependencies, no API key, no model calls —
 just `python3`.
 
+```bash
+pip install whyskill && whyskill install
+```
+
+That second command is the important one. It registers whyskill as a Claude Code
+hook, so **you never run it again** — Claude checks skills on its own, and tells
+you when one is broken. Details in [Running itself](#running-itself).
+
 ```console
 $ whyskill
 
@@ -46,6 +54,65 @@ deploy-staging  .claude/skills/deploy-staging/SKILL.md
            content - so the skill has no description to match on.
       fix: Delete the blank line(s) so `---` is the first line.
 ```
+
+---
+
+## Running itself
+
+Nobody remembers to run a linter for a bug they don't know they have. So the
+normal way to use whyskill is to never type it:
+
+```bash
+whyskill install
+```
+
+This adds two hooks to `.claude/settings.json` (use `--user` for every project,
+`--local` to keep it out of the repository). **The harness runs hooks — Claude
+does not choose to.** That distinction matters here more than usual: a *skill*
+has to be selected to run, and being selected is precisely the thing that fails
+silently. A hook fires whether or not anyone thought about it.
+
+**`PostToolUse`** fires the instant a `SKILL.md` is written, by you or by Claude.
+If the skill has errors, the hook exits 2, which puts its output in front of
+Claude — so a skill written broken gets reported and fixed inside the same turn:
+
+> whyskill: SKILL.md was written with 1 error(s) that will make it fail silently.
+> &nbsp;&nbsp;`.claude/skills/deploy/SKILL.md:1`
+> &nbsp;&nbsp;&nbsp;&nbsp;LOAD001 (error): Blank line(s) before the `---` on line 2
+> &nbsp;&nbsp;&nbsp;&nbsp;fix: Delete the blank line(s) so `---` is the first line.
+
+**`SessionStart`** fires when a session opens and reports skills that were
+already broken before today, as context Claude can act on.
+
+Three properties keep it from becoming a nuisance:
+
+- **It is silent when nothing is wrong.** A clean run prints nothing at all, so
+  it costs no context and never trains you to ignore it.
+- **It never breaks your session.** Any internal failure — a malformed payload, a
+  bug in whyskill itself — exits 0 quietly. A linter that breaks the tool it
+  protects has negative value.
+- **It is cheap on the common path.** Most edits aren't skill files; that case
+  returns before whyskill imports anything.
+
+`SessionStart` reports only errors by default, since warnings on every session
+open would be noise. `PostToolUse` includes warnings, because you're already
+looking at that file. Both are adjustable in the settings it writes.
+
+```bash
+whyskill install --status      # is it installed?
+whyskill install --print       # show the settings.json without writing it
+whyskill install --uninstall   # remove it; other hooks are left untouched
+```
+
+The installer merges rather than overwrites, keeps a `.whyskill-backup`, is
+idempotent, and refuses to touch a `settings.json` it cannot parse.
+
+### Or as a skill
+
+`.claude/skills/whyskill/SKILL.md` ships in this repo, so `/whyskill` works and
+Claude can reach for it when you ask why something isn't firing. It's a
+convenience, not the mechanism — the hooks are what make it autonomous, and the
+skill is subject to every failure mode it detects.
 
 ---
 
@@ -94,7 +161,10 @@ Requires Python 3.9+. No third-party packages, at runtime or otherwise.
 
 ## Use
 
+Most people install the hooks and stop here. To run it directly:
+
 ```bash
+whyskill install              # let Claude check skills without being asked
 whyskill                      # this project's skills, plus your personal ones
 whyskill ./skills             # a directory of skills you are publishing
 whyskill why deploy           # explain one skill

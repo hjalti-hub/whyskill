@@ -15,6 +15,7 @@ from .rules.catalog import CATALOG, GROUPS
 
 EPILOG = """\
 examples:
+  whyskill install                let Claude check skills without being asked
   whyskill                        check the current project plus your personal skills
   whyskill ./skills               check a directory of skills you are publishing
   whyskill why deploy             explain why the `deploy` skill may not be firing
@@ -100,11 +101,55 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list", help="List discovered skills.")
     add_common(listing)
 
+    installer = sub.add_parser(
+        "install",
+        help="Install the hooks so Claude checks skills on its own.",
+        description=(
+            "Register whyskill as a Claude Code hook. Once installed, skills are "
+            "checked when a session starts and whenever a SKILL.md is written - "
+            "the harness runs it, so nobody has to remember to."
+        ),
+    )
+    installer.add_argument(
+        "--user",
+        action="store_true",
+        help="Install into ~/.claude/settings.json instead of this project.",
+    )
+    installer.add_argument(
+        "--local",
+        action="store_true",
+        help="Use .claude/settings.local.json (not shared with the repository).",
+    )
+    installer.add_argument(
+        "--project", type=Path, default=None, help="Project root (default: cwd)."
+    )
+    installer.add_argument("--uninstall", action="store_true", help="Remove the hooks.")
+    installer.add_argument(
+        "--status", action="store_true", help="Report whether the hooks are installed."
+    )
+    installer.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="Print the resulting settings.json without writing it.",
+    )
+
+    # Invoked by Claude Code, not by people: reads the hook payload on stdin.
+    hook = sub.add_parser("hook", help=argparse.SUPPRESS)
+    hook.add_argument("--event", default=None, help="Override the hook event name.")
+    hook.add_argument(
+        "--fail-on",
+        dest="minimum",
+        choices=("error", "warning", "note"),
+        default=None,
+        help="Lowest severity worth reporting for this event.",
+    )
+
     return parser
 
 
 #: Subcommand names, so a bare `whyskill ./skills` can default to `check`.
-COMMANDS = ("check", "why", "rules", "list")
+COMMANDS = ("check", "why", "rules", "list", "install", "hook")
 
 
 def _with_default_command(argv: list[str]) -> list[str]:
@@ -122,8 +167,24 @@ def _with_default_command(argv: list[str]) -> list[str]:
     return ["check", *argv]
 
 
+class UsageError(Exception):
+    """A bad invocation, reported without a stack trace."""
+
+
 def _collect(args: argparse.Namespace) -> tuple[list[Skill], Context, Path | None]:
     explicit = list(args.paths or [])
+
+    # A path that does not exist is a mistake, not an empty result. Without this
+    # check a mistyped subcommand (`whyskill uninstall`) is silently treated as a
+    # directory to scan, and reports "no skills found" with a success exit code.
+    missing = [p for p in explicit if not p.expanduser().exists()]
+    if missing:
+        listed = ", ".join(str(p) for p in missing)
+        raise UsageError(
+            f"no such file or directory: {listed}\n"
+            f"Run `whyskill --help` for usage, or `whyskill list` to see what is discoverable."
+        )
+
     project = args.project
     if project is None:
         project = Path.cwd()
@@ -251,19 +312,52 @@ def cmd_why(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_install(args: argparse.Namespace) -> int:
+    from .install import install, settings_path, status, uninstall
+
+    path = settings_path(user=args.user, project=args.project, local=args.local)
+
+    if args.status:
+        code, message = status(path)
+        print(message)
+        return code
+    if args.uninstall:
+        code, message = uninstall(path)
+        print(message)
+        return code
+
+    code, message = install(path, dry_run=args.print_only)
+    print(message)
+    return code
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    from .hooks import run
+
+    return run(event_name=args.event, minimum=args.minimum)
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(_with_default_command(raw))
 
     command = args.command or "check"
-    if command == "rules":
-        return cmd_rules(args)
-    if command == "list":
-        return cmd_list(args)
-    if command == "why":
-        return cmd_why(args)
-    return cmd_check(args)
+    try:
+        if command == "hook":
+            return cmd_hook(args)
+        if command == "install":
+            return cmd_install(args)
+        if command == "rules":
+            return cmd_rules(args)
+        if command == "list":
+            return cmd_list(args)
+        if command == "why":
+            return cmd_why(args)
+        return cmd_check(args)
+    except UsageError as exc:
+        print(f"whyskill: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
