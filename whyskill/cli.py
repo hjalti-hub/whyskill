@@ -159,7 +159,11 @@ def _with_default_command(argv: list[str]) -> list[str]:
     without the top-level one swallowing subcommand names, so the default is
     applied here rather than in argparse.
     """
-    if not argv or argv[0] in ("-h", "--help", "--version"):
+    # `not argv` must NOT return early: with no arguments at all there is no
+    # subcommand to parse, so argparse produces a Namespace without any of the
+    # check options and the first attribute access raises. Bare `whyskill` is
+    # the most common invocation there is, so it gets the default like the rest.
+    if argv and argv[0] in ("-h", "--help", "--version"):
         return argv
     first_positional = next((a for a in argv if not a.startswith("-")), None)
     if first_positional in COMMANDS:
