@@ -403,6 +403,20 @@ reporting — the value of this tool is entirely in being right about mechanics.
 Behaviour also changes between versions; findings are derived from the skills
 documentation as of September 2026.
 
+## Related
+
+[whyrule](https://github.com/hjalti-hub/whyrule) is the same idea one layer up:
+it reads the CLAUDE.md and `.claude/rules/` files themselves and reports the
+instructions Claude never receives — text stripped before injection, imports
+that resolve to nothing, rules that contradict each other once concatenated.
+
+[deadweight](https://github.com/hjalti-hub/deadweight) answers the other half of
+this one's question. whyskill proves from your configuration that a skill *can't*
+fire; deadweight reads your session history and shows which skills, subagents and
+MCP servers never *do* fire, and what they cost you every session.
+
+Static proof, and empirical evidence.
+
 ## License
 
 MIT
