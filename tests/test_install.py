@@ -34,6 +34,18 @@ class InstallCase(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.path = self.root / ".claude" / "settings.json"
 
+        # `install()` refuses when whyskill is not reachable from an arbitrary
+        # directory, which depends on whether the machine running the tests
+        # happens to have it installed. That made every test below pass on a
+        # development box and fail in CI, where the package is only ever
+        # checked out. Pinning the command keeps these tests about the merge
+        # logic they are actually testing; the tests that are *about*
+        # hook_command patch it themselves, or use `real_hook_command`.
+        self.real_hook_command = install_module.hook_command
+        patcher = mock.patch.object(install_module, "hook_command", return_value="whyskill hook")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def tearDown(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
 
@@ -159,14 +171,14 @@ class RefusesToInstallABrokenHook(InstallCase):
 
     def test_console_script_is_preferred_when_present(self):
         with mock.patch.object(install_module.shutil, "which", return_value="/usr/bin/whyskill"):
-            self.assertEqual(install_module.hook_command(), "whyskill hook")
+            self.assertEqual(self.real_hook_command(), "whyskill hook")
 
     def test_module_form_used_when_importable_without_a_script(self):
         with (
             mock.patch.object(install_module.shutil, "which", return_value=None),
             mock.patch.object(install_module, "_importable_from_anywhere", return_value=True),
         ):
-            command = install_module.hook_command()
+            command = self.real_hook_command()
         self.assertIsNotNone(command)
         self.assertIn("-m whyskill hook", command)
 

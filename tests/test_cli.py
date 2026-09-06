@@ -105,6 +105,17 @@ class BadInvocation(unittest.TestCase):
 
 
 class InstallCommand(unittest.TestCase):
+    """`whyskill install` refuses when whyskill is not reachable from another
+    directory, which is true on a bare checkout such as CI. Pin the command so
+    these exercise the CLI wiring rather than the machine they run on."""
+
+    def setUp(self) -> None:
+        from whyskill import install as install_module
+
+        patcher = mock.patch.object(install_module, "hook_command", return_value="whyskill hook")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_print_only_emits_settings_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, out = run(["install", "--project", tmp, "--print"])
