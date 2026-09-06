@@ -342,24 +342,36 @@ def cmd_hook(args: argparse.Namespace) -> int:
     return run(event_name=args.event, minimum=args.minimum)
 
 
+def _dispatch(args: argparse.Namespace) -> int:
+    command = args.command or "check"
+    if command == "hook":
+        return cmd_hook(args)
+    if command == "install":
+        return cmd_install(args)
+    if command == "rules":
+        return cmd_rules(args)
+    if command == "list":
+        return cmd_list(args)
+    if command == "why":
+        return cmd_why(args)
+    return cmd_check(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(_with_default_command(raw))
 
-    command = args.command or "check"
     try:
-        if command == "hook":
-            return cmd_hook(args)
-        if command == "install":
-            return cmd_install(args)
-        if command == "rules":
-            return cmd_rules(args)
-        if command == "list":
-            return cmd_list(args)
-        if command == "why":
-            return cmd_why(args)
-        return cmd_check(args)
+        code = _dispatch(args)
+        # Flush *inside* the guard, not after it. stdout is block-buffered when
+        # it is a pipe, so output smaller than the buffer never reaches the pipe
+        # while we are running: the write fails for the first time in the
+        # interpreter's own shutdown flush, long after this function returns,
+        # and prints "Exception ignored on flushing sys.stdout" where nothing
+        # can catch it. Flushing here brings that failure back inside the try.
+        sys.stdout.flush()
+        return code
     except UsageError as exc:
         print(f"whyskill: {exc}", file=sys.stderr)
         return 2
@@ -368,9 +380,9 @@ def main(argv: list[str] | None = None) -> int:
         # while we are still writing. That is normal and is how every other
         # command-line tool behaves; a traceback is not.
         #
-        # Python flushes the standard streams at shutdown, which would raise
-        # this a second time and print "Exception ignored", so stdout is
-        # pointed at devnull before returning. Recipe from the Python docs:
+        # Pointing the file descriptor at devnull means the shutdown flush
+        # writes the still-buffered remainder somewhere harmless instead of
+        # raising all over again. Recipe from the Python docs:
         # https://docs.python.org/3/library/signal.html#note-on-sigpipe
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, sys.stdout.fileno())
