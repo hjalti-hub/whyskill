@@ -71,8 +71,8 @@ NOT_INSTALLED = (
     "\n"
     "Install it first, then run `whyskill install` again:\n"
     "\n"
-    "    pip install .        # from this checkout\n"
-    "    pipx install .       # or, to keep it out of your environment\n"
+    "    pip install whyskill     # or: pipx install whyskill\n"
+    "    pip install .            # or, to install this checkout\n"
 )
 
 

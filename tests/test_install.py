@@ -159,7 +159,7 @@ class RefusesToInstallABrokenHook(InstallCase):
             code, message = install(self.path)
         self.assertEqual(code, 2)
         self.assertIn("hooks not installed", message)
-        self.assertIn("pip install .", message)
+        self.assertIn("pip install whyskill", message)
         self.assertFalse(self.path.exists())
 
     def test_existing_settings_are_untouched_when_refusing(self):

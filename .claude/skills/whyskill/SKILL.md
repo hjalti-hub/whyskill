@@ -57,17 +57,16 @@ first and re-run before touching anything else.
 
 ## If it is not installed
 
-Run it from a clone without installing anything:
-
 ```bash
-git clone https://github.com/hjalti-hub/whyskill
-python3 -m whyskill <path-to-skills>   # from inside the clone
+pip install whyskill
+whyskill <path-to-skills>
 ```
 
-To install it so it works from any directory, `pip install .` from that clone.
+It also runs from a clone with nothing installed, as
+`python3 -m whyskill <path-to-skills>` from inside the checkout.
 
 To have it run automatically instead of on request, `whyskill install`
 registers it as a hook: skills are then checked when a session starts and
-whenever a `SKILL.md` is written. That requires the install step above — a hook
-that could only import whyskill from the clone would fail silently everywhere
-else, so `whyskill install` refuses rather than write one.
+whenever a `SKILL.md` is written. That requires a real install — a hook that
+could only import whyskill from a clone would fail silently everywhere else, so
+`whyskill install` refuses rather than write one.
