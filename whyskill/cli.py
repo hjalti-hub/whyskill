@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -362,6 +363,18 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         print(f"whyskill: {exc}", file=sys.stderr)
         return 2
+    except BrokenPipeError:
+        # `whyskill rules | head`, or quitting `less` early, closes the pipe
+        # while we are still writing. That is normal and is how every other
+        # command-line tool behaves; a traceback is not.
+        #
+        # Python flushes the standard streams at shutdown, which would raise
+        # this a second time and print "Exception ignored", so stdout is
+        # pointed at devnull before returning. Recipe from the Python docs:
+        # https://docs.python.org/3/library/signal.html#note-on-sigpipe
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 0
 
 
 if __name__ == "__main__":

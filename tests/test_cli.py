@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -272,3 +273,45 @@ class ListCommand(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PipedOutput(unittest.TestCase):
+    """Regression: piping into `head` printed a BrokenPipeError traceback.
+
+    Found by installing from PyPI and running `whyskill rules | head`. Closing
+    the pipe early is how `head`, `grep -q` and quitting `less` all behave, so
+    a traceback there is the tool's fault, not the user's.
+
+    This uses a real shell pipeline into real `head`. An in-process call cannot
+    reproduce it, and neither can a Python reader: the first attempt here used
+    one, and passed even with the fix removed, because it drained the pipe
+    buffer instead of closing it early. The writer's stderr is redirected to a
+    file so it can be inspected apart from the pipeline's.
+    """
+
+    def _stderr_of_piped(self, args: str) -> str:
+        import subprocess
+
+        with tempfile.NamedTemporaryFile(suffix=".err") as err:
+            subprocess.run(
+                f"{sys.executable} -m whyskill {args} 2>{err.name} | head -1",
+                shell=True,
+                cwd=REPO,
+                stdout=subprocess.DEVNULL,
+            )
+            return Path(err.name).read_text()
+
+    def test_rules_survives_a_closed_pipe(self):
+        stderr = self._stderr_of_piped("rules")
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_check_survives_a_closed_pipe(self):
+        stderr = self._stderr_of_piped(f"{BROKEN} --no-personal --no-plugins --explain")
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_json_survives_a_closed_pipe(self):
+        stderr = self._stderr_of_piped(f"{BROKEN} --no-personal --no-plugins --json")
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Traceback", stderr)
