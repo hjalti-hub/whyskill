@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -105,6 +106,17 @@ class BadInvocation(unittest.TestCase):
 
 
 class InstallCommand(unittest.TestCase):
+    """`whyskill install` refuses when whyskill is not reachable from another
+    directory, which is true on a bare checkout such as CI. Pin the command so
+    these exercise the CLI wiring rather than the machine they run on."""
+
+    def setUp(self) -> None:
+        from whyskill import install as install_module
+
+        patcher = mock.patch.object(install_module, "hook_command", return_value="whyskill hook")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_print_only_emits_settings_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, out = run(["install", "--project", tmp, "--print"])
@@ -257,6 +269,91 @@ class ListCommand(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("dead-skill", out)
         self.assertIn("user-only", out)
+
+
+class PipedOutput(unittest.TestCase):
+    """Regression: piping into `head` printed a BrokenPipeError traceback.
+
+    Found by installing from PyPI and running `whyskill rules | head`. Closing
+    the pipe early is how `head`, `grep -q` and quitting `less` all behave, so
+    a traceback there is the tool's fault, not the user's.
+
+    The pipeline tests below use a real shell pipeline into real `head`. An
+    in-process call cannot reproduce the bug, and neither can a Python reader:
+    the first attempt here used one and passed even with the fix removed,
+    because it drained the pipe buffer instead of closing it early.
+
+    They are still not the whole story - see the unflushed-buffer test at the
+    end, which is the one that holds.
+    """
+
+    def _stderr_of_piped(self, args: str) -> str:
+        import subprocess
+
+        with tempfile.NamedTemporaryFile(suffix=".err") as err:
+            subprocess.run(
+                f"{sys.executable} -m whyskill {args} 2>{err.name} | head -1",
+                shell=True,
+                cwd=REPO,
+                stdout=subprocess.DEVNULL,
+            )
+            return Path(err.name).read_text()
+
+    def test_rules_survives_a_closed_pipe(self):
+        stderr = self._stderr_of_piped("rules")
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_check_survives_a_closed_pipe(self):
+        stderr = self._stderr_of_piped(f"{BROKEN} --no-personal --no-plugins --explain")
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_json_survives_a_closed_pipe(self):
+        stderr = self._stderr_of_piped(f"{BROKEN} --no-personal --no-plugins --json")
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_output_left_in_the_buffer_does_not_raise_at_shutdown(self):
+        """The failure the pipeline tests above let through.
+
+        stdout is block-buffered when it is a pipe. Output smaller than the
+        buffer therefore never reaches the pipe while the command runs: the
+        write fails for the first time in the interpreter's shutdown flush,
+        after main() has returned, and prints "Exception ignored on flushing
+        sys.stdout" where no handler can see it.
+
+        Whether that happens depends on whether `head` exits before or after
+        the first flush, so the pipeline tests pass on one machine and fail on
+        another - they passed locally and failed on all three CI versions.
+        This one removes the race by closing the read end before whyskill
+        starts, so the only write that can fail is the flush main() does
+        itself.
+        """
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)
+        writer = os.fdopen(write_fd, "w")
+
+        with mock.patch.object(sys, "stdout", writer):
+            code = main(["rules"])
+        self.assertEqual(code, 0)
+
+        # Not decoration: if main() returned without flushing, the output is
+        # still sitting in this buffer, and closing raises exactly what the
+        # shutdown flush would have. Asserting only on `code` would pass with
+        # the fix removed.
+        writer.close()
+
+    def test_the_buffer_test_above_is_actually_testing_something(self):
+        """`whyskill rules` must stay smaller than the stdout buffer.
+
+        If its output grew past 8 KiB it would reach the pipe during the run,
+        the failure would surface somewhere main() can already catch it, and
+        the test above would pass whether or not the flush is there.
+        """
+        buffer_size = io.DEFAULT_BUFFER_SIZE
+        _, out = run(["rules"])
+        self.assertLess(len(out.encode()), buffer_size)
 
 
 if __name__ == "__main__":
