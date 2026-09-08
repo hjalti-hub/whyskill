@@ -8,7 +8,9 @@ can be silently shadowed by a same-named *personal* skill, so scanning only
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 
 from .frontmatter import parse
@@ -133,61 +135,99 @@ def _scan_commands(root: Path, source: Source) -> list[Skill]:
     return found
 
 
-#: Dot-directories that belong to Claude. Every other dot-directory under a
-#: plugin belongs to a different tool.
-_CLAUDE_DIRS = frozenset({".claude", ".claude-plugin"})
+#: Where Claude Code puts the plugins it has actually downloaded, laid out as
+#: ``cache/<marketplace>/<plugin>/<version>/``.
+#:
+#: Its sibling ``marketplaces/`` is deliberately not scanned. That directory
+#: holds full git clones of plugin *catalogues* - every plugin a marketplace
+#: offers, installed or not, plus whatever else those repositories happen to
+#: contain. A catalogue clone of a project supporting many AI tools carries the
+#: same skill under `.cursor/`, `.grok/`, `.gemini/`, `plugin/` and a dozen
+#: more. Reading it reported one skill as sixteen colliding duplicates, and
+#: reported five plugins the reader had never installed. ``data/`` is per-plugin
+#: storage and holds no skills either.
+_INSTALLED_ROOT = "cache"
+
+#: Claude Code's own record of which plugins are installed.
+_INSTALLED_RECORD = "installed_plugins.json"
 
 
-def _is_another_tools_copy(path: Path, root: Path) -> bool:
-    """Whether ``path`` sits inside some other tool's configuration directory.
+def _installed_plugin_names(plugins_root: Path) -> frozenset[str] | None:
+    """Plugin names Claude Code records as installed.
 
-    A marketplace entry is a whole git repository, and a project that supports
-    several agents ships the same skill into each one's directory: `.cursor/`,
-    `.gemini/`, `.grok/`, `.codex/` and so on. Those files are real, and they
-    are not Claude skills - Claude Code never loads them.
+    ``None`` means the record could not be read, in which case everything
+    downloaded is scanned - going silent because a file moved would be its own
+    kind of wrong.
 
-    Without this, one such repository is reported as a dozen identical skills
-    colliding with each other, and the fix suggested to the reader is to go and
-    edit another tool's configuration. Reported against pbakaus/impeccable,
-    which supports fourteen harnesses and was accordingly accused of shipping
-    nineteen duplicate skills.
+    An empty set is a real answer, not a missing one: `{"version": 2,
+    "plugins": {}}` is what Claude Code writes when a marketplace has been
+    added but nothing from it installed, and the whole point of this function
+    is to stop reporting on those.
+
+    Only the empty shape has been observed directly. Keys are therefore matched
+    on their last path-like segment, so `plugin`, `marketplace:plugin` and
+    `marketplace/plugin` all resolve the same way.
     """
-    return any(
-        part.startswith(".") and part not in _CLAUDE_DIRS for part in path.relative_to(root).parts
-    )
+    try:
+        data = json.loads((plugins_root / _INSTALLED_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("plugins"), dict):
+        return None
+    return frozenset(re.split(r"[:/]", str(key))[-1].casefold() for key in data["plugins"])
+
+
+def _plugin_of(relative: Path) -> str:
+    """The plugin a path under the cache belongs to.
+
+    The layout is ``<marketplace>/<plugin>/<version>/skills/...``, so the name
+    is the second segment. Taking the directory above ``skills/`` instead - the
+    obvious reading - yields the *version*, which is how a skill came to be
+    reported under the name `4.1.1`.
+    """
+    parts = relative.parts
+    return parts[1] if len(parts) >= 3 else parts[0]
 
 
 def _scan_plugins(plugins_root: Path) -> list[Skill]:
-    """Collect plugin skills, namespaced by their plugin.
-
-    Plugin layouts vary by marketplace, so rather than assume a fixed depth we
-    look for any ``skills/`` directory and treat its parent as the plugin.
-    """
-    if not plugins_root.is_dir():
+    """Collect skills from installed plugins, namespaced by their plugin."""
+    cache = plugins_root / _INSTALLED_ROOT
+    if not cache.is_dir():
         return []
+
+    installed = _installed_plugin_names(plugins_root)
+    if installed is not None and not installed:
+        return []
+
     found: list[Skill] = []
     seen: set[Path] = set()
 
-    for skills_dir in sorted(plugins_root.rglob("skills")):
+    def wanted(path: Path) -> str | None:
+        name = _plugin_of(path.relative_to(cache))
+        if installed and name.casefold() not in installed:
+            return None
+        return name
+
+    for skills_dir in sorted(cache.rglob("skills")):
         if not skills_dir.is_dir():
             continue
-        if _is_another_tools_copy(skills_dir, plugins_root):
+        plugin_name = wanted(skills_dir)
+        if plugin_name is None:
             continue
-        plugin_name = skills_dir.parent.name
         for skill in _scan_skills_root(skills_dir, Source.PLUGIN, plugin=plugin_name):
             if skill.path not in seen:
                 seen.add(skill.path)
                 found.append(skill)
 
     # A plugin may also ship a SKILL.md at its root.
-    for path in sorted(plugins_root.rglob(SKILL_FILE)):
+    for path in sorted(cache.rglob(SKILL_FILE)):
         if path in seen or not path.is_file():
             continue
         if "skills" in path.parent.parts:
             continue
-        if _is_another_tools_copy(path, plugins_root):
+        plugin_name = wanted(path)
+        if plugin_name is None:
             continue
-        plugin_name = path.parent.name
         seen.add(path)
         found.append(_load(path, Source.PLUGIN, plugin_name, plugin=plugin_name))
 

@@ -12,7 +12,7 @@ from typing import TextIO
 
 from .model import Finding, Severity, Skill
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 
 class Style:
