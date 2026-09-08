@@ -133,6 +133,30 @@ def _scan_commands(root: Path, source: Source) -> list[Skill]:
     return found
 
 
+#: Dot-directories that belong to Claude. Every other dot-directory under a
+#: plugin belongs to a different tool.
+_CLAUDE_DIRS = frozenset({".claude", ".claude-plugin"})
+
+
+def _is_another_tools_copy(path: Path, root: Path) -> bool:
+    """Whether ``path`` sits inside some other tool's configuration directory.
+
+    A marketplace entry is a whole git repository, and a project that supports
+    several agents ships the same skill into each one's directory: `.cursor/`,
+    `.gemini/`, `.grok/`, `.codex/` and so on. Those files are real, and they
+    are not Claude skills - Claude Code never loads them.
+
+    Without this, one such repository is reported as a dozen identical skills
+    colliding with each other, and the fix suggested to the reader is to go and
+    edit another tool's configuration. Reported against pbakaus/impeccable,
+    which supports fourteen harnesses and was accordingly accused of shipping
+    nineteen duplicate skills.
+    """
+    return any(
+        part.startswith(".") and part not in _CLAUDE_DIRS for part in path.relative_to(root).parts
+    )
+
+
 def _scan_plugins(plugins_root: Path) -> list[Skill]:
     """Collect plugin skills, namespaced by their plugin.
 
@@ -147,6 +171,8 @@ def _scan_plugins(plugins_root: Path) -> list[Skill]:
     for skills_dir in sorted(plugins_root.rglob("skills")):
         if not skills_dir.is_dir():
             continue
+        if _is_another_tools_copy(skills_dir, plugins_root):
+            continue
         plugin_name = skills_dir.parent.name
         for skill in _scan_skills_root(skills_dir, Source.PLUGIN, plugin=plugin_name):
             if skill.path not in seen:
@@ -158,6 +184,8 @@ def _scan_plugins(plugins_root: Path) -> list[Skill]:
         if path in seen or not path.is_file():
             continue
         if "skills" in path.parent.parts:
+            continue
+        if _is_another_tools_copy(path, plugins_root):
             continue
         plugin_name = path.parent.name
         seen.add(path)
